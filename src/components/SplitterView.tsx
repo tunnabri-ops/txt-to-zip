@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Scissors,
   Play,
@@ -17,12 +17,16 @@ import {
   FolderArchive,
   AlertTriangle,
   Lock,
-  Sparkles
+  Sparkles,
+  Zap,
+  Cpu,
+  HelpCircle,
+  Check
 } from 'lucide-react';
-import { FileRecordItem, SplitConfig, SplitMode, CustomSplitType, DetectedFormat } from '../types';
+import { FileRecordItem, SplitConfig, SplitMode, CustomSplitType, DetectedFormat, AutoAnalysisResult } from '../types';
 import { FileProcessor } from '../utils/fileProcessor';
 import { createZipArchive, downloadBlob, downloadText } from '../utils/zipGenerator';
-import { formatBytes } from '../utils/formatDetector';
+import { formatBytes, analyzeFileForAutoSplit } from '../utils/formatDetector';
 
 interface SplitterViewProps {
   files: FileRecordItem[];
@@ -41,9 +45,15 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
 }) => {
   const currentFile = files.find((f) => f.id === selectedFileId) || files[0] || null;
 
-  // Split Configuration State
+  // Auto Analysis of active file
+  const autoAnalysis = useMemo<AutoAnalysisResult | null>(() => {
+    if (!currentFile) return null;
+    return analyzeFileForAutoSplit(currentFile);
+  }, [currentFile?.id, currentFile?.recordsCount, currentFile?.size]);
+
+  // Split Configuration State - Default to 'auto' for zero-friction experience!
   const [config, setConfig] = useState<SplitConfig>({
-    mode: 'group',
+    mode: 'auto',
     recordsPerFile: 50,
     customType: 'record_count',
     customValue: 100,
@@ -77,16 +87,28 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
 
   const processorRef = useRef<FileProcessor | null>(null);
 
-  // Sync prefix if current file changes
+  // Sync prefix & auto-parameters if current file or autoAnalysis changes
   useEffect(() => {
     if (currentFile) {
       const base = currentFile.name.replace(/\.[^/.]+$/, '');
-      setConfig((prev) => ({
-        ...prev,
-        prefix: prev.prefix || `${base}_split`,
-      }));
+      setConfig((prev) => {
+        const updated = {
+          ...prev,
+          prefix: prev.prefix || `${base}_split`,
+        };
+
+        if (autoAnalysis && prev.mode === 'auto') {
+          updated.recordsPerFile = autoAnalysis.recommendedBatchSize;
+          updated.retainHeader = autoAnalysis.retainHeader;
+          updated.hasHeader = autoAnalysis.hasHeaders;
+          if (autoAnalysis.recommendedDelimiter) {
+            updated.delimiter = autoAnalysis.recommendedDelimiter;
+          }
+        }
+        return updated;
+      });
     }
-  }, [currentFile?.id]);
+  }, [currentFile?.id, autoAnalysis]);
 
   if (!currentFile) {
     return (
@@ -116,6 +138,17 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
     setGeneratedChunks([]);
     setGeneratedZipBlob(null);
 
+    // Apply auto analysis parameters if in Auto mode
+    const effectiveConfig = { ...config };
+    if (config.mode === 'auto' && autoAnalysis) {
+      effectiveConfig.recordsPerFile = autoAnalysis.recommendedBatchSize;
+      effectiveConfig.retainHeader = autoAnalysis.retainHeader;
+      effectiveConfig.hasHeader = autoAnalysis.hasHeaders;
+      if (autoAnalysis.recommendedDelimiter) {
+        effectiveConfig.delimiter = autoAnalysis.recommendedDelimiter;
+      }
+    }
+
     const processor = new FileProcessor();
     processorRef.current = processor;
 
@@ -123,7 +156,7 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
       const result = await processor.processFile(
         currentFile.fileBlob,
         currentFile.name,
-        config,
+        effectiveConfig,
         {
           onProgress: (p) => {
             setProgress(p.percentage);
@@ -136,9 +169,8 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
             setSanitizedCount(p.sanitizedSecretsCount);
           },
           onChunkGenerated: (name, content) => {
-            // Keep preview collection reasonable
             setGeneratedChunks((prev) => {
-              if (prev.length < 50) {
+              if (prev.length < 60) {
                 return [...prev, { name, content, size: content.length }];
               }
               return prev;
@@ -219,7 +251,6 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
       setGeneratedZipBlob(zipResult.blob);
       downloadBlob(zipResult.blob, zipResult.filename);
 
-      // Update file object
       onUpdateFile({
         ...currentFile,
         outputZipSize: zipResult.size,
@@ -234,7 +265,7 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* File Selector Bar */}
+      {/* File Selector & Quick Auto Action Bar */}
       <div className="bg-[#25283c] border border-white/5 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-[#2997FF]/15 text-[#2997FF] flex items-center justify-center font-bold">
@@ -261,10 +292,25 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
           </div>
         </div>
 
-        {/* Security badge */}
-        <div className="flex items-center gap-2 text-xs text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-xl border border-emerald-500/20">
-          <ShieldCheck className="w-4 h-4" />
-          <span>Privacy Guard Active (Redacts passwords & tokens)</span>
+        {/* 1-Click Auto Run + Privacy Badge */}
+        <div className="flex items-center gap-3">
+          {!isProcessing && (
+            <button
+              onClick={() => {
+                setConfig((prev) => ({ ...prev, mode: 'auto' }));
+                setTimeout(() => startSplitting(), 50);
+              }}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-[#2997FF] to-[#00F0FF] text-white text-xs font-bold shadow-md shadow-[#2997FF]/20 hover:opacity-95 transition-all active:scale-98"
+            >
+              <Zap className="w-4 h-4 fill-white" />
+              <span>1-Click Auto Split (অটো স্প্লিট)</span>
+            </button>
+          )}
+
+          <div className="flex items-center gap-2 text-xs text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-xl border border-emerald-500/20">
+            <ShieldCheck className="w-4 h-4" />
+            <span className="hidden sm:inline">Privacy Guard Active</span>
+          </div>
         </div>
       </div>
 
@@ -277,16 +323,38 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
               <div>
                 <h2 className="text-lg font-bold text-white flex items-center gap-2">
                   <Scissors className="w-5 h-5 text-[#2997FF]" />
-                  Splitting Modes
+                  Splitting Modes / মোড নির্বাচন
                 </h2>
                 <p className="text-xs text-[#A5A8BA]">
-                  Select how records will be divided into destination TXT partitions
+                  Choose Smart Auto for zero-config automatic splitting, or pick a manual mode
                 </p>
               </div>
             </div>
 
-            {/* 3 Main Mode Selectors */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+            {/* 4 Mode Selectors: Auto is #1 Recommended */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-6">
+              {/* Option 0: Smart Auto Split (NEW & RECOMMENDED) */}
+              <button
+                type="button"
+                onClick={() => setConfig({ ...config, mode: 'auto' })}
+                className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden ${
+                  config.mode === 'auto'
+                    ? 'bg-gradient-to-b from-[#2997FF]/25 to-[#1e2030] border-[#00F0FF] shadow-lg shadow-[#2997FF]/20 ring-1 ring-[#00F0FF]/50'
+                    : 'bg-[#1e2030] border-white/5 hover:border-white/20'
+                }`}
+              >
+                <div className="absolute top-2 right-2 bg-gradient-to-r from-[#2997FF] to-[#00F0FF] text-white text-[9px] font-extrabold px-1.5 py-0.5 rounded-md uppercase tracking-wider">
+                  Recommended
+                </div>
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#2997FF] to-[#00F0FF] text-white flex items-center justify-center mb-2 shadow-sm">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <h3 className="text-xs font-bold text-white mb-0.5">✨ Smart Auto (অটো)</h3>
+                <p className="text-[11px] text-[#A5A8BA] leading-tight">
+                  Auto-detects data structure & creates balanced files.
+                </p>
+              </button>
+
               {/* Mode 1: Individual Split */}
               <button
                 type="button"
@@ -300,7 +368,7 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
                 <div className="w-8 h-8 rounded-xl bg-[#2997FF]/20 text-[#2997FF] flex items-center justify-center mb-2">
                   <FileText className="w-4 h-4" />
                 </div>
-                <h3 className="text-xs font-bold text-white mb-1">Mode 1: Individual</h3>
+                <h3 className="text-xs font-bold text-white mb-0.5">Individual Split</h3>
                 <p className="text-[11px] text-[#A5A8BA] leading-tight">
                   1 separate TXT file per record or line item.
                 </p>
@@ -319,9 +387,9 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
                 <div className="w-8 h-8 rounded-xl bg-[#FFB800]/20 text-[#FFB800] flex items-center justify-center mb-2">
                   <Layers className="w-4 h-4" />
                 </div>
-                <h3 className="text-xs font-bold text-white mb-1">Mode 2: Group Split</h3>
+                <h3 className="text-xs font-bold text-white mb-0.5">Group Split</h3>
                 <p className="text-[11px] text-[#A5A8BA] leading-tight">
-                  10, 50, 100, 500, 1,000 or custom count per file.
+                  10, 50, 100, 500, 1k or custom count per file.
                 </p>
               </button>
 
@@ -338,12 +406,77 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
                 <div className="w-8 h-8 rounded-xl bg-[#00F0FF]/20 text-[#00F0FF] flex items-center justify-center mb-2">
                   <Settings className="w-4 h-4" />
                 </div>
-                <h3 className="text-xs font-bold text-white mb-1">Mode 3: Custom</h3>
+                <h3 className="text-xs font-bold text-white mb-0.5">Custom Split</h3>
                 <p className="text-[11px] text-[#A5A8BA] leading-tight">
-                  Delimiter, size, line count, CSV row or JSON object.
+                  Delimiter, size, line count, CSV row or JSON.
                 </p>
               </button>
             </div>
+
+            {/* Smart Auto Explanation Panel (Shown when Auto mode is selected) */}
+            {config.mode === 'auto' && autoAnalysis && (
+              <div className="bg-gradient-to-br from-[#1e2030] via-[#212437] to-[#1a1d2e] p-5 rounded-2xl border border-[#2997FF]/30 mb-6 shadow-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-white/10">
+                  <div className="flex items-center gap-2.5">
+                    <span className="p-2 rounded-xl bg-[#2997FF]/20 text-[#2997FF]">
+                      <Cpu className="w-5 h-5" />
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span>Auto Data Intelligence (অটো অ্যানালাইজার)</span>
+                        <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-medium">
+                          Analysis Ready
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-[#A5A8BA]">
+                        Structure: <span className="text-[#00F0FF] font-semibold">{autoAnalysis.detectedTypeLabel}</span>
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-xs text-[#2997FF] font-mono font-bold bg-[#2997FF]/10 px-2.5 py-1 rounded-lg">
+                    {autoAnalysis.reasonTag}
+                  </span>
+                </div>
+
+                {/* Explanation in plain English and Bengali */}
+                <div className="space-y-2">
+                  <p className="text-xs text-white/95 leading-relaxed bg-[#171824]/60 p-3 rounded-xl border border-white/5">
+                    💡 <span className="font-semibold">{autoAnalysis.explanation}</span>
+                  </p>
+                  <p className="text-xs text-emerald-300/90 leading-relaxed bg-emerald-950/20 p-3 rounded-xl border border-emerald-500/20">
+                    🇧🇩 <span className="font-medium">{autoAnalysis.explanationBn}</span>
+                  </p>
+                </div>
+
+                {/* Strategy Snapshot Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-[11px]">
+                  <div className="p-2.5 rounded-xl bg-[#171824]/50 border border-white/5">
+                    <span className="text-[#A5A8BA] block">Est. Partitions:</span>
+                    <span className="text-white font-bold font-mono text-xs">
+                      ~{autoAnalysis.expectedPartitions} files
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-[#171824]/50 border border-white/5">
+                    <span className="text-[#A5A8BA] block">Records per Part:</span>
+                    <span className="text-white font-bold font-mono text-xs">
+                      {autoAnalysis.recommendedBatchSize} records
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-[#171824]/50 border border-white/5">
+                    <span className="text-[#A5A8BA] block">Table Headers:</span>
+                    <span className="text-emerald-400 font-bold text-xs">
+                      {autoAnalysis.hasHeaders ? 'Auto-Retained' : 'Plain Records'}
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-[#171824]/50 border border-white/5">
+                    <span className="text-[#A5A8BA] block">Auto Redaction:</span>
+                    <span className="text-[#00F0FF] font-bold text-xs">
+                      Pass/Token Mask
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Mode-Specific Sub-Controls */}
             {config.mode === 'group' && (
@@ -468,7 +601,7 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
 
               <div>
                 <label className="text-xs font-semibold text-[#A5A8BA] block mb-1">
-                  Extension:
+                  Output File Format:
                 </label>
                 <select
                   value={config.extension}
@@ -517,10 +650,10 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
                   {!isProcessing ? (
                     <button
                       onClick={startSplitting}
-                      className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-[#2997FF] hover:bg-[#1f87ed] text-white text-sm font-bold shadow-lg shadow-[#2997FF]/25 transition-all active:scale-98"
+                      className="flex items-center gap-2 px-7 py-3 rounded-2xl bg-[#2997FF] hover:bg-[#1f87ed] text-white text-sm font-bold shadow-lg shadow-[#2997FF]/25 transition-all active:scale-98"
                     >
                       <Play className="w-4 h-4 fill-white" />
-                      <span>Start Splitting</span>
+                      <span>{config.mode === 'auto' ? 'Start Auto Split (অটো স্প্লিট শুরু করুন)' : 'Start Splitting'}</span>
                     </button>
                   ) : (
                     <>
@@ -567,7 +700,7 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
                     className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold shadow-lg shadow-emerald-500/20 transition-all"
                   >
                     <FolderArchive className="w-4 h-4" />
-                    <span>{isZipping ? `Archiving (${zipProgress}%)...` : `Download All as ZIP (${generatedChunks.length})`}</span>
+                    <span>{isZipping ? `Archiving (${zipProgress}%)...` : `Download All as ZIP (${generatedChunks.length} files)`}</span>
                   </button>
                 )}
               </div>
@@ -644,7 +777,7 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
               {generatedChunks.length === 0 ? (
                 <div className="h-64 border border-dashed border-white/10 rounded-2xl flex flex-col items-center justify-center p-6 text-center text-xs text-[#A5A8BA]">
                   <Archive className="w-8 h-8 text-[#A5A8BA]/40 mb-2" />
-                  <span>Click "Start Splitting" to generate output files</span>
+                  <span>Click "Start Auto Split" to automatically generate partitions</span>
                 </div>
               ) : (
                 generatedChunks.slice(0, 30).map((chunk, i) => (

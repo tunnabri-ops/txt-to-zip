@@ -214,6 +214,16 @@ export const RecentFilesTable: React.FC<RecentFilesTableProps> = ({
                             <Eye className="w-3.5 h-3.5" />
                           </button>
 
+                          {/* 1-Click Auto Split Button */}
+                          <button
+                            onClick={() => onProcess(file)}
+                            className="px-2 py-1 rounded-md bg-[#2997FF]/15 text-[#2997FF] hover:bg-[#2997FF] hover:text-white transition-all text-[10px] font-bold flex items-center gap-1"
+                            title="Auto-detect data & split (অটো স্প্লিট)"
+                          >
+                            <span className="text-[11px]">⚡</span>
+                            <span>Auto</span>
+                          </button>
+
                           {/* Process / Split button */}
                           <button
                             onClick={() => onProcess(file)}
@@ -221,9 +231,9 @@ export const RecentFilesTable: React.FC<RecentFilesTableProps> = ({
                             className={`p-1.5 rounded-lg transition-colors ${
                               isProcessing
                                 ? 'text-[#2997FF] animate-spin'
-                                : 'text-[#2997FF] hover:bg-[#2997FF]/15'
+                                : 'text-[#A5A8BA] hover:text-white hover:bg-white/10'
                             }`}
-                            title="Split File into TXT"
+                            title="Configure Split Options"
                           >
                             {isProcessing ? (
                               <Loader2 className="w-3.5 h-3.5" />

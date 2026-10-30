@@ -8,9 +8,22 @@ export type DetectedFormat =
   | 'custom_delimiter'
   | 'unknown';
 
-export type SplitMode = 'individual' | 'group' | 'custom';
+export type SplitMode = 'auto' | 'individual' | 'group' | 'custom';
 
 export type CustomSplitType = 'record_count' | 'line_count' | 'file_size' | 'delimiter' | 'json_object' | 'csv_row';
+
+export interface AutoAnalysisResult {
+  detectedTypeLabel: string;
+  recommendedMode: 'group' | 'delimiter' | 'csv_row' | 'json_object';
+  recommendedBatchSize: number;
+  recommendedDelimiter?: string;
+  hasHeaders: boolean;
+  retainHeader: boolean;
+  explanation: string;
+  explanationBn: string;
+  expectedPartitions: number;
+  reasonTag: string;
+}
 
 export interface SplitConfig {
   mode: SplitMode;

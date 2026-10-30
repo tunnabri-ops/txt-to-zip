@@ -130,7 +130,7 @@ export class FileProcessor {
     let targetRecordsPerFile = 1;
     if (config.mode === 'individual') {
       targetRecordsPerFile = 1;
-    } else if (config.mode === 'group') {
+    } else if (config.mode === 'group' || config.mode === 'auto') {
       targetRecordsPerFile = Math.max(1, config.recordsPerFile);
     } else if (config.mode === 'custom') {
       if (config.customType === 'record_count' || config.customType === 'line_count' || config.customType === 'csv_row') {
@@ -156,7 +156,7 @@ export class FileProcessor {
       const combined = remainder + textChunk;
       let records: string[] = [];
 
-      if (config.mode === 'custom' && config.customType === 'delimiter' && config.delimiter) {
+      if ((config.mode === 'custom' && config.customType === 'delimiter' && config.delimiter) || (config.mode === 'auto' && config.delimiter)) {
         const parts = combined.split(config.delimiter);
         remainder = parts.pop() || '';
         records = parts;

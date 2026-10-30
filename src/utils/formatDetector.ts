@@ -138,3 +138,124 @@ export function estimateRecords(totalBytes: number, sampleBytes: number, sampleR
   const bytesPerRecord = sampleBytes / sampleRecords;
   return Math.max(1, Math.round(totalBytes / bytesPerRecord));
 }
+
+import { AutoAnalysisResult, FileRecordItem } from '../types';
+
+/**
+ * Intelligently analyzes file structure and generates optimal splitting strategy automatically
+ */
+export function analyzeFileForAutoSplit(
+  file: FileRecordItem,
+  sampleContent?: string
+): AutoAnalysisResult {
+  const format = file.format;
+  const sample = sampleContent || (file.previewLines ? file.previewLines.join('\n') : '');
+  const lines = sample.split(/\r?\n/).filter(Boolean);
+  const totalRecords = file.recordsCount || 100;
+
+  // 1. Check for prominent delimiter like --- or === or ###
+  const delimiterMatch = sample.match(/(?:^|\n)(---|===|###|--- RECORD ---|=== END ===)(?:\n|$)/);
+  if (delimiterMatch) {
+    const delim = delimiterMatch[1];
+    const estimatedDelimCount = Math.max(2, Math.round(sample.split(delim).length * (file.size / Math.max(1024, sample.length))));
+    return {
+      detectedTypeLabel: 'Delimited Document (বাউন্ডারি চিহ্নিত ফাইল)',
+      recommendedMode: 'delimiter',
+      recommendedBatchSize: 1,
+      recommendedDelimiter: delim,
+      hasHeaders: false,
+      retainHeader: false,
+      expectedPartitions: Math.max(2, Math.min(estimatedDelimCount, 500)),
+      reasonTag: `Marker "${delim}"`,
+      explanation: `Detected boundary marker "${delim}". Automatically splitting at each natural record divider.`,
+      explanationBn: `ফাইলে "${delim}" চিহ্নিতকারী পাওয়া গেছে। স্বয়ংক্রিয়ভাবে প্রতিটি সেকশন আলাদা ফাইলে ভাগ করা হবে।`,
+    };
+  }
+
+  // 2. CSV / TSV Table
+  if (format === 'csv' || format === 'tsv') {
+    let optimalBatch = 50;
+    if (totalRecords <= 100) optimalBatch = 20;
+    else if (totalRecords <= 1000) optimalBatch = 50;
+    else if (totalRecords <= 10000) optimalBatch = 250;
+    else optimalBatch = 500;
+
+    const partitions = Math.ceil(totalRecords / optimalBatch);
+
+    return {
+      detectedTypeLabel: format === 'csv' ? 'CSV Structured Table (সিএসভি ডেটা টেবিল)' : 'TSV Tabular File (টিএসভি টেবিল)',
+      recommendedMode: 'csv_row',
+      recommendedBatchSize: optimalBatch,
+      hasHeaders: true,
+      retainHeader: true,
+      expectedPartitions: partitions,
+      reasonTag: `${optimalBatch} Rows / Partition`,
+      explanation: `Detected structured table with header row. Automatically packaging ${optimalBatch} rows per file while retaining column headers in every partition.`,
+      explanationBn: `এটি একটি টেবিল ফাইল। স্বয়ংক্রিয়ভাবে প্রতি ফাইলে ${optimalBatch}টি করে রেকর্ড রাখা হবে এবং প্রতিটি ফাইলে হেডারের নাম অক্ষত থাকবে।`,
+    };
+  }
+
+  // 3. JSON Lines or JSON Array
+  if (format === 'json' || format === 'jsonl') {
+    let optimalBatch = 50;
+    if (totalRecords <= 200) optimalBatch = 25;
+    else if (totalRecords <= 2000) optimalBatch = 100;
+    else optimalBatch = 250;
+
+    const partitions = Math.ceil(totalRecords / optimalBatch);
+
+    return {
+      detectedTypeLabel: format === 'jsonl' ? 'JSON Lines Stream (জেসন লাইনস)' : 'JSON Object Archive (জেসন ডেটা)',
+      recommendedMode: 'group',
+      recommendedBatchSize: optimalBatch,
+      hasHeaders: false,
+      retainHeader: false,
+      expectedPartitions: partitions,
+      reasonTag: `${optimalBatch} Objects / Part`,
+      explanation: `Detected structured JSON entries. Grouping into balanced ${optimalBatch}-object files for easy parsing and memory efficiency.`,
+      explanationBn: `এটি জেসন (JSON) ফাইল। স্বয়ংক্রিয়ভাবে প্রতি ফাইলে ${optimalBatch}টি অবজেক্ট গুচ্ছাকারে আলাদা করা হবে।`,
+    };
+  }
+
+  // 4. Structured Server Logs
+  if (format === 'structured_log') {
+    let optimalBatch = 100;
+    if (totalRecords <= 300) optimalBatch = 50;
+    else if (totalRecords <= 5000) optimalBatch = 100;
+    else optimalBatch = 500;
+
+    const partitions = Math.ceil(totalRecords / optimalBatch);
+
+    return {
+      detectedTypeLabel: 'Server & Access Logs (সার্ভার লগ ফাইল)',
+      recommendedMode: 'group',
+      recommendedBatchSize: optimalBatch,
+      hasHeaders: false,
+      retainHeader: false,
+      expectedPartitions: partitions,
+      reasonTag: `${optimalBatch} Log Entries / Part`,
+      explanation: `Detected timestamped server logs. Grouping ${optimalBatch} entries per file with automatic password and session token redaction enabled.`,
+      explanationBn: `এটি সার্ভার লগ ফাইল। প্রতি ফাইলে ${optimalBatch}টি লগ এন্ট্রি রাখা হবে এবং গোপনীয় পাসওয়ার্ড ও টোকেন স্বয়ংক্রিয়ভাবে মাস্ক করা হবে।`,
+    };
+  }
+
+  // 5. Plain Text
+  let optimalBatch = 100;
+  if (totalRecords <= 150) optimalBatch = 25;
+  else if (totalRecords <= 1000) optimalBatch = 50;
+  else optimalBatch = 100;
+
+  const partitions = Math.ceil(totalRecords / optimalBatch);
+
+  return {
+    detectedTypeLabel: 'Plain Text Document (সাধারণ টেক্সট ফাইল)',
+    recommendedMode: 'group',
+    recommendedBatchSize: optimalBatch,
+    hasHeaders: false,
+    retainHeader: false,
+    expectedPartitions: partitions,
+    reasonTag: `${optimalBatch} Lines / File`,
+    explanation: `Detected standard text lines. Dividing into balanced ${optimalBatch}-line files optimized for readability and archiving.`,
+    explanationBn: `ফাইলটি স্বয়ংক্রিয়ভাবে প্রতি ফাইলে ${optimalBatch} লাইন করে সুন্দরভাবে ভাগ করে জিপ (ZIP) তৈরি করবে।`,
+  };
+}

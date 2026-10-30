@@ -307,9 +307,9 @@ export const UploadModal: React.FC<UploadModalProps> = ({
             <button
               onClick={commitFiles}
               disabled={stagedFiles.length === 0}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#2997FF] hover:bg-[#1a85ed] disabled:opacity-40 text-white text-xs font-semibold transition-all shadow-md shadow-[#2997FF]/20"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#2997FF] to-[#00F0FF] hover:opacity-95 disabled:opacity-40 text-white text-xs font-bold transition-all shadow-md shadow-[#2997FF]/20"
             >
-              <span>Add to Workspace</span>
+              <span>Auto Split & Add (অটো স্প্লিট)</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>
