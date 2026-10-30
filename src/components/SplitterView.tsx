@@ -122,11 +122,14 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
     );
   }
 
-  const startSplitting = async () => {
-    if (!currentFile.fileBlob) {
-      alert('File payload not loaded in browser memory.');
-      return;
-    }
+  const startSplitting = async (forcedMode?: SplitMode) => {
+    // Sanitize forcedMode to ensure it's not a React MouseEvent
+    const activeMode: SplitMode = (typeof forcedMode === 'string' ? forcedMode : null) || config.mode;
+
+    // Fallback blob if needed
+    const sourceBlob =
+      currentFile.fileBlob ||
+      new Blob([currentFile.previewLines.join('\n')], { type: 'text/plain' });
 
     setIsProcessing(true);
     setIsPaused(false);
@@ -139,8 +142,8 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
     setGeneratedZipBlob(null);
 
     // Apply auto analysis parameters if in Auto mode
-    const effectiveConfig = { ...config };
-    if (config.mode === 'auto' && autoAnalysis) {
+    const effectiveConfig = { ...config, mode: activeMode };
+    if (activeMode === 'auto' && autoAnalysis) {
       effectiveConfig.recordsPerFile = autoAnalysis.recommendedBatchSize;
       effectiveConfig.retainHeader = autoAnalysis.retainHeader;
       effectiveConfig.hasHeader = autoAnalysis.hasHeaders;
@@ -154,7 +157,7 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
 
     try {
       const result = await processor.processFile(
-        currentFile.fileBlob,
+        sourceBlob,
         currentFile.name,
         effectiveConfig,
         {
@@ -183,15 +186,42 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
       setIsProcessing(false);
       setProgress(100);
 
-      // Update parent file record
-      onUpdateFile({
-        ...currentFile,
-        status: 'completed',
-        progress: 100,
-        outputCount: result.outputFiles.length,
-        outputTxtFiles: result.outputFiles,
-        sanitizedSecretsCount: result.sanitizedSecretsCount,
-      });
+      // Automatically create and download ZIP archive!
+      if (result.outputFiles.length > 0) {
+        try {
+          setIsZipping(true);
+          const cleanBase = currentFile.name.replace(/\.[^/.]+$/, '');
+          const zipName = `${cleanBase}_split_${result.outputFiles.length}parts.zip`;
+
+          const zipResult = await createZipArchive(
+            result.outputFiles.map((c) => ({ name: c.name, content: c.content })),
+            {
+              zipFilename: zipName,
+              compressionLevel: effectiveConfig.compressionLevel,
+              onProgress: (p) => setZipProgress(p),
+            }
+          );
+
+          setGeneratedZipBlob(zipResult.blob);
+          downloadBlob(zipResult.blob, zipResult.filename);
+          setIsZipping(false);
+
+          // Update parent file record
+          onUpdateFile({
+            ...currentFile,
+            status: 'completed',
+            progress: 100,
+            outputCount: result.outputFiles.length,
+            outputTxtFiles: result.outputFiles,
+            outputZipBlob: zipResult.blob,
+            outputZipSize: zipResult.size,
+            sanitizedSecretsCount: result.sanitizedSecretsCount,
+          });
+        } catch (zipErr) {
+          console.error('ZIP generation error', zipErr);
+          setIsZipping(false);
+        }
+      }
     } catch (err: any) {
       setIsProcessing(false);
       if (err.message !== 'Processing cancelled by user') {
@@ -298,7 +328,7 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
             <button
               onClick={() => {
                 setConfig((prev) => ({ ...prev, mode: 'auto' }));
-                setTimeout(() => startSplitting(), 50);
+                startSplitting('auto');
               }}
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-[#2997FF] to-[#00F0FF] text-white text-xs font-bold shadow-md shadow-[#2997FF]/20 hover:opacity-95 transition-all active:scale-98"
             >
@@ -644,16 +674,49 @@ export const SplitterView: React.FC<SplitterViewProps> = ({
             </div>
 
             {/* Real-Time Processing Execution Bar */}
-            <div className="mt-8 pt-6 border-t border-white/5">
+            <div className="mt-8 pt-6 border-t border-white/5 space-y-4">
+              {/* Big Prominent Success Alert Banner */}
+              {generatedChunks.length > 0 && !isProcessing && (
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/60 via-[#1e2030] to-emerald-950/40 border border-emerald-500/40 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                      <CheckCircle2 className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span>ফাইল সফলভাবে তৈরি ও ডাউনলোড হয়েছে!</span>
+                        <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-md font-mono">
+                          {generatedChunks.length} Parts Generated
+                        </span>
+                      </h4>
+                      <p className="text-xs text-[#A5A8BA]">
+                        All {generatedChunks.length} partitioned TXT files have been packaged and downloaded to your computer as ZIP.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={handleCreateAndDownloadZip}
+                      disabled={isZipping}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold shadow-md shadow-emerald-500/20 transition-all"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>{isZipping ? `Archiving (${zipProgress}%)...` : 'Download ZIP Again (আবার ডাউনলোড)'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                 <div className="flex items-center gap-2">
                   {!isProcessing ? (
                     <button
-                      onClick={startSplitting}
+                      onClick={() => startSplitting()}
                       className="flex items-center gap-2 px-7 py-3 rounded-2xl bg-[#2997FF] hover:bg-[#1f87ed] text-white text-sm font-bold shadow-lg shadow-[#2997FF]/25 transition-all active:scale-98"
                     >
                       <Play className="w-4 h-4 fill-white" />
-                      <span>{config.mode === 'auto' ? 'Start Auto Split (অটো স্প্লিট শুরু করুন)' : 'Start Splitting'}</span>
+                      <span>{config.mode === 'auto' ? 'Start Auto Split (অটো স্প্লিট ও জিপ ডাউনলোড)' : 'Start Splitting & Download ZIP'}</span>
                     </button>
                   ) : (
                     <>

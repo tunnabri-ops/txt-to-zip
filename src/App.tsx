@@ -16,7 +16,8 @@ import { SettingsModal } from './components/SettingsModal';
 import { FileRecordItem } from './types';
 import { createInitialSampleFiles } from './utils/sampleDataGenerator';
 import { createZipArchive, downloadBlob } from './utils/zipGenerator';
-import { formatBytes } from './utils/formatDetector';
+import { formatBytes, analyzeFileForAutoSplit } from './utils/formatDetector';
+import { FileProcessor } from './utils/fileProcessor';
 
 export default function App() {
   // Navigation & View state
@@ -89,12 +90,115 @@ export default function App() {
     setActiveTab('splitter');
   };
 
+  const [toastMessage, setToastMessage] = useState<{ text: string; subtext?: string; type: 'success' | 'info' } | null>(null);
+
+  const showToast = (text: string, subtext?: string, type: 'success' | 'info' = 'success') => {
+    setToastMessage({ text, subtext, type });
+    setTimeout(() => {
+      setToastMessage((prev) => (prev?.text === text ? null : prev));
+    }, 6000);
+  };
+
+  // 1-Click Auto Split & Immediate ZIP Download Engine
+  const handleAutoSplitFile = async (file: FileRecordItem) => {
+    try {
+      showToast(
+        `অটো স্প্লিট শুরু হয়েছে: ${file.name}...`,
+        'ডেটা বিশ্লেষণ করে ফাইল তৈরি ও জিপ ডাউনলোড হচ্ছে...',
+        'info'
+      );
+
+      // Ensure valid source Blob
+      const sourceBlob =
+        file.fileBlob || new Blob([file.previewLines.join('\n')], { type: 'text/plain' });
+
+      // Run intelligent analysis
+      const analysis = analyzeFileForAutoSplit(file);
+
+      const autoConfig = {
+        mode: 'auto' as const,
+        recordsPerFile: analysis.recommendedBatchSize,
+        customType: 'record_count' as const,
+        customValue: analysis.recommendedBatchSize,
+        delimiter: analysis.recommendedDelimiter || '---',
+        hasHeader: analysis.hasHeaders,
+        retainHeader: analysis.retainHeader,
+        prefix: `${file.name.replace(/\.[^/.]+$/, '')}_part`,
+        extension: 'txt',
+        subfolderGrouping: false,
+        groupFolderSize: 50,
+        redactSecrets: true,
+        compressionLevel: 6,
+      };
+
+      // Mark processing in state
+      setFiles((prev) =>
+        prev.map((f) => (f.id === file.id ? { ...f, status: 'processing', progress: 30 } : f))
+      );
+
+      const processor = new FileProcessor();
+      const result = await processor.processFile(sourceBlob, file.name, autoConfig, {
+        onProgress: (p: { percentage: number; processedBytes: number }) => {
+          setFiles((prev) =>
+            prev.map((f) =>
+              f.id === file.id
+                ? { ...f, progress: p.percentage, processedBytes: p.processedBytes }
+                : f
+            )
+          );
+        },
+      });
+
+      // Package immediately into ZIP
+      const cleanBase = file.name.replace(/\.[^/.]+$/, '');
+      const zipName = `${cleanBase}_auto_split_${result.outputFiles.length}parts.zip`;
+
+      const zipResult = await createZipArchive(
+        result.outputFiles.map((c: { name: string; content: string }) => ({ name: c.name, content: c.content })),
+        {
+          zipFilename: zipName,
+          compressionLevel: 6,
+        }
+      );
+
+      // Trigger browser download immediately!
+      downloadBlob(zipResult.blob, zipResult.filename);
+
+      // Update file state to completed
+      const updatedFile: FileRecordItem = {
+        ...file,
+        status: 'completed',
+        progress: 100,
+        outputCount: result.outputFiles.length,
+        outputTxtFiles: result.outputFiles,
+        outputZipBlob: zipResult.blob,
+        outputZipSize: zipResult.size,
+        sanitizedSecretsCount: result.sanitizedSecretsCount,
+      };
+
+      setFiles((prev) => prev.map((f) => (f.id === file.id ? updatedFile : f)));
+
+      showToast(
+        `🎉 ${file.name} সফলভাবে ${result.outputFiles.length}টি ফাইলে ভাগ হয়ে ZIP ডাউনলোড হয়েছে!`,
+        `${result.outputFiles.length} files created & saved to your computer as ${zipResult.filename}`,
+        'success'
+      );
+    } catch (err: any) {
+      alert(`Auto Split error: ${err.message}`);
+      setFiles((prev) =>
+        prev.map((f) => (f.id === file.id ? { ...f, status: 'idle', progress: 0 } : f))
+      );
+    }
+  };
+
   const handleDownloadFileZip = async (file: FileRecordItem) => {
+    // If already split and zipped, download directly
     if (file.outputZipBlob) {
       downloadBlob(file.outputZipBlob, `${file.name.replace(/\.[^/.]+$/, '')}_archive.zip`);
       return;
     }
 
+    // If split parts exist, create zip and download
     if (file.outputTxtFiles && file.outputTxtFiles.length > 0) {
       const res = await createZipArchive(file.outputTxtFiles, {
         zipFilename: `${file.name.replace(/\.[^/.]+$/, '')}_split.zip`,
@@ -103,13 +207,8 @@ export default function App() {
       return;
     }
 
-    if (file.fileBlob) {
-      const text = await file.fileBlob.text();
-      const res = await createZipArchive([{ name: file.name, content: text }], {
-        zipFilename: `${file.name.replace(/\.[^/.]+$/, '')}.zip`,
-      });
-      downloadBlob(res.blob, res.filename);
-    }
+    // If not split yet, auto-split and download!
+    await handleAutoSplitFile(file);
   };
 
   const handleDownloadMasterZip = async () => {
@@ -141,6 +240,7 @@ export default function App() {
       compressionLevel: 6,
     });
     downloadBlob(res.blob, res.filename);
+    showToast('Master ZIP Archive Downloaded!', 'Includes all partitioned and raw files in your workspace.');
   };
 
   const handleResetSession = () => {
@@ -206,6 +306,29 @@ export default function App() {
           onToggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
         />
 
+        {/* Floating Action Alert / Toast Banner */}
+        {toastMessage && (
+          <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-[#1e2030] via-[#25283c] to-[#1e2030] border border-[#2997FF]/40 shadow-2xl flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#2997FF] to-[#00F0FF] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-md">
+                ⚡
+              </div>
+              <div>
+                <p className="text-xs font-bold text-white">{toastMessage.text}</p>
+                {toastMessage.subtext && (
+                  <p className="text-[11px] text-[#A5A8BA] mt-0.5">{toastMessage.subtext}</p>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => setToastMessage(null)}
+              className="text-[#A5A8BA] hover:text-white text-xs px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 transition-colors shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* View Content Switching */}
         {activeTab === 'dashboard' && (
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 flex-1 items-start">
@@ -237,6 +360,7 @@ export default function App() {
                     searchQuery={searchQuery}
                     onPreview={handlePreviewFile}
                     onProcess={handleProcessFile}
+                    onAutoSplit={handleAutoSplitFile}
                     onDownload={handleDownloadFileZip}
                     onRemove={handleRemoveFile}
                     onViewAll={() => setActiveTab('history')}
@@ -292,6 +416,7 @@ export default function App() {
               searchQuery={searchQuery}
               onPreview={handlePreviewFile}
               onProcess={handleProcessFile}
+              onAutoSplit={handleAutoSplitFile}
               onDownload={handleDownloadFileZip}
               onRemove={handleRemoveFile}
             />

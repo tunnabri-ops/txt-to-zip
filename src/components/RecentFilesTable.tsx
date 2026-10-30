@@ -25,6 +25,7 @@ interface RecentFilesTableProps {
   searchQuery: string;
   onPreview: (file: FileRecordItem) => void;
   onProcess: (file: FileRecordItem) => void;
+  onAutoSplit?: (file: FileRecordItem) => void;
   onDownload: (file: FileRecordItem) => void;
   onRemove: (id: string) => void;
   onViewAll?: () => void;
@@ -35,6 +36,7 @@ export const RecentFilesTable: React.FC<RecentFilesTableProps> = ({
   searchQuery,
   onPreview,
   onProcess,
+  onAutoSplit,
   onDownload,
   onRemove,
   onViewAll,
@@ -216,11 +218,20 @@ export const RecentFilesTable: React.FC<RecentFilesTableProps> = ({
 
                           {/* 1-Click Auto Split Button */}
                           <button
-                            onClick={() => onProcess(file)}
-                            className="px-2 py-1 rounded-md bg-[#2997FF]/15 text-[#2997FF] hover:bg-[#2997FF] hover:text-white transition-all text-[10px] font-bold flex items-center gap-1"
-                            title="Auto-detect data & split (অটো স্প্লিট)"
+                            onClick={() => (onAutoSplit ? onAutoSplit(file) : onProcess(file))}
+                            disabled={isProcessing}
+                            className={`px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${
+                              isProcessing
+                                ? 'bg-white/10 text-[#A5A8BA]'
+                                : 'bg-gradient-to-r from-[#2997FF] to-[#00F0FF] text-white hover:opacity-90 shadow-sm shadow-[#2997FF]/20 active:scale-95'
+                            }`}
+                            title="Auto-detect data & split into ZIP (অটো স্প্লিট)"
                           >
-                            <span className="text-[11px]">⚡</span>
+                            {isProcessing ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <span className="text-[11px]">⚡</span>
+                            )}
                             <span>Auto</span>
                           </button>
 
