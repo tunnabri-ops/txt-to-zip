@@ -1,0 +1,6 @@
+{
+  "name": "TXT TO ZIP",
+  "description": "High-performance client-side TXT file splitter and streaming ZIP generator with privacy-first local processing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
